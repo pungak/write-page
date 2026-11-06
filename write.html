@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>획 쓰기 — 따라쓰기 원본</title>
+<style>
+:root { --fg:#1d1d1f; --muted:#6b6b70; --line:#d0d0d5; --accent:#2a78d6; --warn:#c0392b; --bg:#f4f4f6; }
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); overscroll-behavior:none;
+  font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  -webkit-text-size-adjust:100%; }
+body { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+.bar { padding:5px 8px; display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; background:#fff;
+  border-bottom:1px solid var(--line); }
+label { font-size:14px; display:flex; align-items:center; gap:4px; white-space:nowrap; }
+input[type=text] { width:7em; font-size:16px; padding:4px 6px; }   /* 16px 미만이면 iOS가 확대한다 */
+input[type=number] { width:4.2em; font-size:16px; padding:4px; }
+input:disabled { background:#eee; color:#888; }
+/* 글자가 바뀌어도 줄 감김이 달라지지 않도록 폭 고정 */
+select { font-size:15px; padding:4px; width:11em; }
+button, .filebtn { font-size:15px; padding:7px 11px; border:1px solid var(--line); border-radius:8px; background:#fff;
+  color:var(--fg); cursor:pointer; touch-action:manipulation; font-family:inherit; white-space:nowrap; }
+button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+button.on { background:#e3edfb; border-color:var(--accent); color:#174e94; }
+button:disabled { opacity:.45; cursor:default; }
+.filebtn input { display:none; }
+.sep { width:1px; align-self:stretch; background:var(--line); }
+/* 상태줄: 높이 고정 한 줄, 넘치면 말줄임(누르면 캔버스 위에 전체 글을 잠깐 겹쳐 보여 줌) */
+#status { flex:none; font-size:14px; line-height:20px; height:29px; padding:4px 10px; background:#fafafa;
+  border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+#status .warn { color:var(--warn); font-weight:600; }
+#status .ok { color:#1e7d46; }
+.bar { flex:none; }
+/* 음절 고치기 줄: 캔버스 아래쪽에 겹쳐 띄운다(켜고 꺼도 캔버스가 움직이지 않음) */
+#sylbar { display:none; position:absolute; left:0; right:0; bottom:0; background:rgba(255,255,255,.93);
+  border-top:1px solid var(--line); }
+#sylbar.show { display:flex; }
+#sylbar button.cur { outline:3px solid var(--accent); }
+#toast { display:none; position:absolute; left:6px; right:6px; top:30px; padding:8px 10px; font-size:14px;
+  background:rgba(40,40,45,.92); color:#fff; border-radius:8px; pointer-events:none; }
+#toast.show { display:block; }
+#stage { flex:1; min-height:0; display:flex; align-items:flex-start; justify-content:center; padding:6px; }
+/* 묶음 개수: 글자가 바뀌어도 폭 고정 */
+#bundlecount { display:inline-block; width:10.5em; font-size:14px; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; color:var(--muted); }
+#bundlecount.unsent { color:#a35a00; font-weight:600; }
+/* 길게 눌러도 글자 선택 안 됨(iPad). 입력란을 감싼 label에는 넣지 않는다(Safari에서 입력이 막힐 수 있음) */
+button, #status, #badge, #bundlecount { -webkit-user-select:none; user-select:none; }
+button.armed { background:#fdecea; border-color:var(--warn); color:var(--warn); }
+#wrap { position:relative; }
+/* 필순 표시: 쓰는 흐름을 막지 않도록 캔버스 오른쪽 위에 작게 */
+#badge { position:absolute; top:4px; right:6px; font-size:12px; padding:2px 7px; border-radius:10px;
+  background:rgba(255,255,255,.85); color:#8a8a90; pointer-events:none;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:70%; }
+#badge.same { color:#1e7d46; }
+canvas { background:#fff; border:1px solid var(--line); display:block; touch-action:none;
+  -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+</style>
+</head>
+<body>
+<div class="bar" id="bar1">
+  <label>필체ID <input type="text" id="style" autocomplete="off" spellcheck="false"></label>
+  <label>단어 <input type="text" id="word" autocomplete="off" spellcheck="false"></label>
+  <label>출력 <input type="number" id="wmm" min="10" max="300" step="1" value="60">×<input type="number" id="hmm" min="10" max="300" step="1" value="25">mm</label>
+  <button id="penonly" title="펜이 감지되면 자동으로 켜집니다">펜만 쓰기: 꺼짐</button>
+</div>
+<div class="bar" id="bar2">
+  <button id="undo">실행 취소</button>
+  <button id="clear">전체 지우기</button>
+  <span class="sep"></span>
+  <label class="filebtn">이전 원본 불러오기<input type="file" id="refload" accept=".json,application/json" multiple></label>
+  <select id="refsel" title="필순 안내에 쓸 원본(필순 그룹별)"></select>
+  <button id="refoff">안내 끄기</button>
+  <span class="sep"></span>
+  <button id="edit">음절 고치기</button>
+  <button id="resplit">자동 다시 나누기</button>
+  <span class="sep"></span>
+  <button id="save">저장</button>
+  <button id="savenext" class="primary">저장 후 다음</button>
+</div>
+<div class="bar" id="bar3">
+  <button id="mode" title="하나씩: 저장할 때마다 내려받기 / 묶음: 모았다가 한 파일로">저장 방식: 하나씩</button>
+  <span id="bundlecount"></span>
+  <button id="bundledl">묶음 내려받기</button>
+  <button id="share" title="기기의 공유 창으로 넘깁니다(지원하지 않으면 내려받기)">공유</button>
+  <button id="bundleclear">묶음 비우기</button>
+</div>
+<div id="status" title="누르면 전체 글을 보여 줍니다"></div>
+<div id="stage"><div id="wrap"><canvas id="cv"></canvas><div id="badge"></div><div id="toast"></div>
+  <div class="bar" id="sylbar">
+    <button id="selprev">◀ 이전 획</button>
+    <span id="selinfo" style="font-size:14px"></span>
+    <span id="sylbtns" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+    <button id="selnext">다음 획 ▶</button>
+  </div>
+</div></div>
+
+<!-- 순수 함수(DOM을 쓰지 않음). tests/test_write_page.py가 node로 이 부분만 시험한다. -->
+<script id="core">
+'use strict';
+const HW = (() => {
+  const FORMAT = 'hw-strokes', VERSION = 2, APP = 'write.html', APP_VERSION = '3';
+  const BUNDLE_FORMAT = 'hw-strokes-bundle', BUNDLE_VERSION = 1;
+  const MARGIN_MM = 2;                       // profile render.margin_mm 기본값과 같게
+  const PALETTE = ['#2a78d6', '#eb6834', '#1f9d55', '#9b51c9', '#c8961a', '#d6336c', '#138d90', '#7a5c3e'];
+  const FORBIDDEN = '<>:"/\\|?*';
+  const RESERVED = new Set(['CON', 'PRN', 'AUX', 'NUL']);
+  for (let i = 1; i <= 9; i++) { RESERVED.add('COM' + i); RESERVED.add('LPT' + i); }
+
+  const r2 = v => Math.round(v * 100) / 100;
+  const pad2 = n => String(n).padStart(2, '0');
+
+  /** hwtrace.paths와 같은 규칙. [정규화된 이름, null] 또는 [null, 오류 문구] */
+  function checkName(name, what, allowSpace) {
+    const s = String(name || '').normalize('NFC').trim();
+    if (!s) return [null, `${what}이(가) 비어 있습니다.`];
+    if (!allowSpace && /\s/.test(s)) return [null, `${what}에 공백을 넣을 수 없습니다.`];
+    for (const c of s) {
+      if (FORBIDDEN.includes(c) || c.charCodeAt(0) < 32) return [null, `${what}에 쓸 수 없는 문자: ${JSON.stringify(c)}`];
+    }
+    if (/[. ]$/.test(s)) return [null, `${what}은(는) 마침표나 공백으로 끝날 수 없습니다.`];
+    if (RESERVED.has(s.split('.')[0].toUpperCase())) return [null, `Windows 예약어는 ${what}으로 쓸 수 없습니다.`];
+    return [s, null];
+  }
+  const checkStyle = s => checkName(s, '필체 ID', true);
+  const checkWord = w => checkName(w, '단어', false);
+  const chars = w => Array.from(String(w || '').normalize('NFC').trim());
+
+  /** 출력 비율(wmm×hmm) 캔버스 W×H 안에 음절 칸 n개(정사각형)를 가운데 둔다. 좌표 단위는 캔버스 css px. */
+  function layoutGuide(W, H, wmm, hmm, n) {
+    n = Math.max(1, n | 0);
+    const m = MARGIN_MM / hmm * H;
+    const bw = W - 2 * m, bh = H - 2 * m;
+    const s = Math.max(1, Math.min(bh * 0.86, bw * 0.96 / n));
+    const x = (W - s * n) / 2, y = (H - s) / 2;
+    return { x: r2(x), y: r2(y), width: r2(s * n), height: r2(s), cells: n, cell_width: r2(s),
+             baseline_y: r2(y + s), midline_y: r2(y + s / 2), aspect_mm: [wmm, hmm] };
+  }
+
+  /**
+   * 캔버스 크기와 좌표 기준(W, H, guide) 정하기. 획이 하나라도 있으면(locked) 화면을 돌리거나 창 크기가 바뀌어도
+   * 이전 값을 그대로 돌려준다(크기 변경은 전체 지우기·저장 후 다음에서 새 원본을 시작할 때만).
+   */
+  function layoutCanvas(prev, availW, availH, wmm, hmm, n, locked) {
+    if (locked && prev) return prev;
+    let w = Math.max(100, availW), h = w * hmm / wmm;
+    if (h > availH && availH > 80) { h = availH; w = h * wmm / hmm; }
+    return { W: w, H: h, guide: layoutGuide(w, h, wmm, hmm, n) };
+  }
+
+  function xbox(points) {
+    let mn = Infinity, mx = -Infinity;
+    for (const p of points) { if (p[0] < mn) mn = p[0]; if (p[0] > mx) mx = p[0]; }
+    return [mn, mx, (mn + mx) / 2];
+  }
+
+  function nearestCell(stroke, g) {
+    const cx = xbox(stroke.points)[2];
+    return Math.min(g.cells - 1, Math.max(0, Math.floor((cx - g.x) / g.cell_width)));
+  }
+
+  /**
+   * 음절 자동 구분. 한글은 음절 순서대로 쓰므로 획 순서를 연속 구간 n개로 나눈다(DP).
+   * 비용 = 구간 x 범위²(칸 폭 단위) + 0.3 × 구간 획 중심의 칸 중심 이탈 평균.
+   * 획이 n개보다 적으면 가장 가까운 칸으로.
+   */
+  function autoSplit(strokes, g) {
+    const M = strokes.length, n = g.cells;
+    if (M === 0) return [];
+    if (n <= 1) return strokes.map(() => 0);
+    if (M < n) return strokes.map(s => nearestCell(s, g));
+    const cw = g.cell_width, bb = strokes.map(s => xbox(s.points));
+    const cost = (a, b, j) => {
+      let mn = Infinity, mx = -Infinity, dev = 0;
+      const cc = g.x + cw * (j + 0.5);
+      for (let k = a; k < b; k++) {
+        mn = Math.min(mn, bb[k][0]); mx = Math.max(mx, bb[k][1]);
+        dev += Math.abs(bb[k][2] - cc);
+      }
+      const ext = (mx - mn) / cw;
+      return ext * ext + 0.3 * dev / cw / (b - a);
+    };
+    // dp[j][b]: 앞 b개 획을 음절 0..j로 나눈 최소 비용
+    const dp = [], from = [];
+    for (let j = 0; j < n; j++) { dp.push(new Array(M + 1).fill(Infinity)); from.push(new Array(M + 1).fill(-1)); }
+    for (let b = 1; b <= M - (n - 1); b++) dp[0][b] = cost(0, b, 0);
+    for (let j = 1; j < n; j++) {
+      for (let b = j + 1; b <= M - (n - 1 - j); b++) {
+        for (let a = j; a < b; a++) {
+          if (dp[j - 1][a] === Infinity) continue;
+          const v = dp[j - 1][a] + cost(a, b, j);
+          if (v < dp[j][b]) { dp[j][b] = v; from[j][b] = a; }
+        }
+      }
+    }
+    const out = new Array(M).fill(0);
+    let b = M;
+    for (let j = n - 1; j >= 0; j--) {
+      const a = j === 0 ? 0 : from[j][b];
+      for (let k = a; k < b; k++) out[k] = j;
+      b = a;
+    }
+    return out;
+  }
+
+  /** 안내 칸 기준 정규화(칸 높이 = 1, 칸 왼쪽 위 = 0) */
+  const normPoint = (p, g) => [(p[0] - g.x) / g.height, (p[1] - g.y) / g.height];
+  /** 다른 원본의 좌표를 지금 안내 칸으로 옮긴다(칸 높이 기준 같은 배율, 칸 가운데 맞춤) */
+  function mapPoint(p, gFrom, gTo) {
+    const s = gTo.height / gFrom.height;
+    const fx = gFrom.x + gFrom.width / 2, fy = gFrom.y + gFrom.height / 2;
+    const tx = gTo.x + gTo.width / 2, ty = gTo.y + gTo.height / 2;
+    return [tx + (p[0] - fx) * s, ty + (p[1] - fy) * s];
+  }
+
+  /** 같은 번호의 획이 이전 원본과 다른 점(필순 일치 판정, S2와 같은 기준). 문구 목록 */
+  function orderIssues(refStroke, gRef, stroke, gCur, maxAngle = 60, maxStart = 0.35) {
+    const rp = refStroke.points, cp = stroke.points;
+    const a0 = normPoint(rp[0], gRef), a1 = normPoint(rp[rp.length - 1], gRef);
+    const b0 = normPoint(cp[0], gCur), b1 = normPoint(cp[cp.length - 1], gCur);
+    const out = [];
+    if (Math.hypot(a0[0] - b0[0], a0[1] - b0[1]) > maxStart) out.push('시작 위치');
+    const va = [a1[0] - a0[0], a1[1] - a0[1]], vb = [b1[0] - b0[0], b1[1] - b0[1]];
+    const la = Math.hypot(...va), lb = Math.hypot(...vb);
+    if (la > 0.08 && lb > 0.08) {
+      const c = Math.max(-1, Math.min(1, (va[0] * vb[0] + va[1] * vb[1]) / (la * lb)));
+      if (Math.acos(c) * 180 / Math.PI > maxAngle) out.push('방향');
+    }
+    return out;
+  }
+
+  /**
+   * 두 원본이 같은 필순인지(필순 그룹 규칙, S2 hwtrace.order와 같은 기준).
+   * 획 수 같음 + 음절 구분 같음 + 획마다 orderIssues 없음. 반환: 다른 점 문구 목록(빈 목록 = 같은 필순)
+   */
+  function orderDiffs(a, b) {
+    const out = [];
+    if (a.strokes.length !== b.strokes.length) {
+      out.push(`획 수 ${a.strokes.length}→${b.strokes.length}`);
+      return out;
+    }
+    if (a.syllables.some((v, i) => v !== b.syllables[i])) out.push('음절 구분');
+    for (let i = 0; i < a.strokes.length; i++) {
+      const iss = orderIssues(a.strokes[i], a.guide, b.strokes[i], b.guide);
+      if (iss.length) out.push(`${i + 1}번 획 ${iss.join('·')}`);
+    }
+    return out;
+  }
+
+  /** 지금까지 쓴 획(strokes, guide)이 안내 원본의 앞부분과 같은 필순인지(쓰는 중 표시용) */
+  function prefixMatches(ref, strokes, guide) {
+    if (strokes.length > ref.strokes.length) return false;
+    for (let i = 0; i < strokes.length; i++) {
+      if (orderIssues(ref.strokes[i], ref.guide, strokes[i], guide).length) return false;
+    }
+    return true;
+  }
+
+  /**
+   * 필순 그룹 나누기. items: [{name, data}]. 이름순으로 보며 '그룹의 모든 원본과' 같은 필순인 첫 그룹에 넣고,
+   * 없으면 새 그룹. 대표 하나와만 비교하지 않는 것은 A≈B, B≈C, A≠C가 한 그룹으로 이어지지 않게 하려는 것.
+   * 반환: [{id: 'G1', names: [...]}] (첫 원본 순서로 G1, G2, ...)
+   */
+  function groupSources(items) {
+    const sorted = items.slice().sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+    const groups = [];
+    for (const it of sorted) {
+      const g = groups.find(gr => gr.items.every(m => orderDiffs(m.data, it.data).length === 0));
+      if (g) g.items.push(it); else groups.push({ items: [it] });
+    }
+    return groups.map((g, i) => ({ id: `G${i + 1}`, names: g.items.map(m => m.name) }));
+  }
+
+  /** 불러온 원본 검사. 오류 문구 또는 null (version 1도 읽는다) */
+  function validateSource(d) {
+    if (!d || typeof d !== 'object') return 'JSON 객체가 아닙니다.';
+    if (d.format !== FORMAT) return `형식이 ${FORMAT}가 아닙니다.`;
+    if (d.version !== 1 && d.version !== VERSION) return `지원하지 않는 버전: ${d.version}`;
+    const g = d.guide;
+    if (!g || !(g.height > 0) || !(g.cells >= 1)) return '안내 칸(guide) 정보가 없습니다.';
+    if (!Array.isArray(d.strokes) || d.strokes.length === 0) return '획이 없습니다.';
+    for (const [i, s] of d.strokes.entries()) {
+      if (!s || !Array.isArray(s.points) || s.points.length === 0) return `${i + 1}번 획에 점이 없습니다.`;
+      for (const p of s.points) {
+        if (!Array.isArray(p) || p.length !== 4 || !p.every(v => typeof v === 'number' && isFinite(v)))
+          return `${i + 1}번 획의 점 형식이 [x, y, t, 필압]이 아닙니다.`;
+      }
+    }
+    if (!Array.isArray(d.syllables) || d.syllables.length !== d.strokes.length) return '음절 구분 수가 획 수와 다릅니다.';
+    if (!d.syllables.every(v => Number.isInteger(v) && v >= 0 && v < g.cells)) return '음절 번호가 범위를 벗어났습니다.';
+    return null;
+  }
+
+  function localIso(dt) {
+    const off = -dt.getTimezoneOffset(), sg = off >= 0 ? '+' : '-', a = Math.abs(off);
+    return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:` +
+      `${pad2(dt.getMinutes())}:${pad2(dt.getSeconds())}${sg}${pad2(Math.floor(a / 60))}:${pad2(a % 60)}`;
+  }
+  const ymd = dt => `${dt.getFullYear()}${pad2(dt.getMonth() + 1)}${pad2(dt.getDate())}`;
+  const fileName = (style, word, date, seq) => `${style}_${word}_${date}_${pad2(seq)}.json`;
+
+  /**
+   * 저장할 원본 객체. st: {style_id, word, W, H, guide, penOnly, reference, strokes, syl, manual}
+   * reference: 안내로 쓴 원본 {file, order_match} 또는 null
+   */
+  function buildSource(st, env) {
+    return {
+      format: FORMAT, version: VERSION, app: { name: APP, version: APP_VERSION },
+      style_id: st.style_id, word: st.word, syllable_count: st.guide.cells,
+      created: env.created, date: env.date, seq: env.seq,
+      device: env.device,
+      canvas: { width: r2(st.W), height: r2(st.H), unit: 'css_px' },
+      guide: st.guide,
+      pen_only: !!st.penOnly,
+      reference: st.reference || null,
+      strokes: st.strokes.map(s => ({ pointer_type: s.pointer_type, points: s.points })),
+      syllables: st.syl.slice(),
+      syllables_manual: !!st.manual,
+    };
+  }
+
+  /** 최상위 키 한 줄씩, 획은 한 줄에 하나(git 비교가 쉽게) */
+  function formatSource(d) {
+    const lines = Object.entries(d).map(([k, v]) => {
+      if (k !== 'strokes') return ` ${JSON.stringify(k)}: ${JSON.stringify(v)}`;
+      const body = v.map(s => `  {"pointer_type": ${JSON.stringify(s.pointer_type)}, "points": ${JSON.stringify(s.points)}}`);
+      return ` "strokes": [\n${body.join(',\n')}\n ]`;
+    });
+    return `{\n${lines.join(',\n')}\n}\n`;
+  }
+
+  // ---------- 묶음(여러 원본을 한 파일로, docs/stroke_format.md) ----------
+  const isBundle = d => !!d && typeof d === 'object' && d.format === BUNDLE_FORMAT;
+  const bundleName = (dt, n) =>
+    `묶음_${ymd(dt)}-${pad2(dt.getHours())}${pad2(dt.getMinutes())}${pad2(dt.getSeconds())}_${n}개.json`;
+
+  /** items: [{name, data}] (저장 순서). 원본은 하나씩 저장할 때와 같은 객체 그대로 */
+  function buildBundle(items, created) {
+    return { format: BUNDLE_FORMAT, version: BUNDLE_VERSION, app: { name: APP, version: APP_VERSION },
+             created, count: items.length, sources: items.map(it => ({ name: it.name, source: it.data })) };
+  }
+
+  /** 최상위 키 한 줄씩, 원본은 한 줄에 하나 */
+  function formatBundle(b) {
+    const lines = Object.entries(b).map(([k, v]) => {
+      if (k !== 'sources') return ` ${JSON.stringify(k)}: ${JSON.stringify(v)}`;
+      return ` "sources": [\n${v.map(s => '  ' + JSON.stringify(s)).join(',\n')}\n ]`;
+    });
+    return `{\n${lines.join(',\n')}\n}\n`;
+  }
+
+  /** 묶음 풀기: {items: [{name, data}], errors: [문구]} (묶음 자체가 잘못되면 items 없이 errors만) */
+  function unpackBundle(d) {
+    if (!isBundle(d)) return { items: [], errors: [`형식이 ${BUNDLE_FORMAT}가 아닙니다.`] };
+    if (d.version !== BUNDLE_VERSION) return { items: [], errors: [`지원하지 않는 묶음 버전: ${d.version}`] };
+    if (!Array.isArray(d.sources) || !d.sources.length) return { items: [], errors: ['묶음에 원본이 없습니다.'] };
+    const items = [], errors = [];
+    d.sources.forEach((s, i) => {
+      const name = s && typeof s.name === 'string' ? s.name : `#${i + 1}`;
+      const err = s && /\.json$/i.test(name) ? validateSource(s.source) : '이름이 잘못되었습니다.';
+      if (err) errors.push(`${name}: ${err}`); else items.push({ name, data: s.source });
+    });
+    return { items, errors };
+  }
+
+  return { FORMAT, VERSION, APP_VERSION, BUNDLE_FORMAT, PALETTE, checkStyle, checkWord, chars, layoutGuide, layoutCanvas,
+           autoSplit, nearestCell, normPoint, mapPoint, orderIssues, orderDiffs, prefixMatches, groupSources,
+           validateSource, localIso, ymd, fileName, buildSource, formatSource,
+           isBundle, bundleName, buildBundle, formatBundle, unpackBundle };
+})();
+if (typeof module !== 'undefined') module.exports = HW;
+</script>
+
+<script>
+'use strict';
+(() => {
+  const $ = id => document.getElementById(id);
+  const cv = $('cv'), ctx = cv.getContext('2d');
+  const S = {
+    W: 0, H: 0, scale: 1, guide: null,
+    strokes: [], syl: [], manual: false,
+    active: null, activeId: null, t0: null,
+    penSeen: false, penOnly: false, penOnlyUser: null,   // penOnlyUser: null이면 자동(펜 감지 시 켜짐)
+    pointerTypes: new Set(),
+    edit: false, sel: -1,
+    refs: [], groups: [],          // 불러온·저장한 원본 [{name, data}]과 필순 그룹 [{id, names}]
+    refName: null, guideOff: false, // 안내로 쓸 원본 이름, 안내를 끈 상태
+    clearArmed: null,
+    msg: '', msgClass: '', drawQueued: false,
+    tBase: 0,                       // 되살린 획 뒤에 이어 쓸 때 t를 이어 가기 위한 시작값(ms)
+    savedAs: null,                  // 지금 캔버스의 획을 이미 저장(또는 묶음에 담음)했으면 그 이름
+    mode: 'single',                 // 저장 방식: single(하나씩 내려받기) | bundle(묶음에 모으기)
+    bundle: [],                     // 묶음에 담은 원본 [{name, data}] (기기 저장소에도 보관)
+    sentNames: [],                  // 마지막으로 내려받기·공유한 묶음에 들어 있던 이름들
+    bundleArmed: null,
+  };
+
+  // ---------- 기기 저장소(새로 열어도 이어서). 이 기기의 이 브라우저 안에만 남고 밖으로 보내지 않는다 ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('hwtrace.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    /** 성공하면 true. 저장 공간이 모자라거나 막힌 브라우저면 false */
+    set(k, v) { try { localStorage.setItem('hwtrace.' + k, JSON.stringify(v)); return true; } catch { return false; } },
+    del(k) { try { localStorage.removeItem('hwtrace.' + k); } catch { /* 무시 */ } },
+  };
+  $('style').value = store.get('style', '');
+  $('word').value = store.get('word', '');
+  $('wmm').value = store.get('wmm', 60);
+  $('hmm').value = store.get('hmm', 25);
+  S.penOnlyUser = store.get('penOnlyUser', null);
+  if (S.penOnlyUser !== null) S.penOnly = S.penOnlyUser;
+
+  const aspect = () => {
+    const w = Math.min(300, Math.max(10, parseFloat($('wmm').value) || 60));
+    const h = Math.min(300, Math.max(10, parseFloat($('hmm').value) || 25));
+    return [w, h];
+  };
+  const cells = () => Math.max(1, HW.chars($('word').value).length);
+  const lw = () => Math.max(2, S.guide.height * 0.035);   // 화면 표시용 굵기(저장값과 무관)
+  /** 지금 안내로 쓰는 원본 {name, data} 또는 null */
+  const curRef = () => (S.guideOff || !S.refName ? null : S.refs.find(r => r.name === S.refName) || null);
+  const groupOf = name => (S.groups.find(g => g.names.includes(name)) || { id: '?' }).id;
+
+  // ---------- 배치 ----------
+  /**
+   * 획이 하나라도 있는 동안에는 화면을 돌려도 캔버스 크기·좌표 기준을 바꾸지 않는다(그리기만 다시).
+   * 새 크기는 전체 지우기·저장 후 다음으로 새 원본을 시작할 때(reset) 적용된다.
+   */
+  function fit() {
+    const st = $('stage');
+    const [wmm, hmm] = aspect();
+    const locked = S.strokes.length > 0 || !!S.active;
+    const prev = S.guide ? { W: S.W, H: S.H, guide: S.guide } : null;
+    const L = HW.layoutCanvas(prev, st.clientWidth - 12, st.clientHeight - 12, wmm, hmm, cells(), locked);
+    if (L !== prev) applySize(L);
+    S.scale = 1;   // 화면 크기 = 좌표 기준 크기
+    draw();
+  }
+  function applySize(L) {
+    S.W = L.W; S.H = L.H; S.guide = L.guide;
+    cv.style.width = S.W + 'px'; cv.style.height = S.H + 'px';
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(S.W * dpr); cv.height = Math.round(S.H * dpr);
+  }
+
+  function lockInputs() {
+    const lock = S.strokes.length > 0 || !!S.active;
+    for (const id of ['word', 'wmm', 'hmm']) {
+      $(id).disabled = lock;
+      $(id).title = lock ? '전체 지우기 후 바꿀 수 있습니다' : '';
+    }
+  }
+
+  // ---------- 그리기 ----------
+  function schedule() {
+    if (S.drawQueued) return;
+    S.drawQueued = true;
+    requestAnimationFrame(() => { S.drawQueued = false; draw(); });
+  }
+
+  function pathOf(c, pts, map) {
+    c.beginPath();
+    const p0 = map ? map(pts[0]) : pts[0];
+    c.moveTo(p0[0], p0[1]);
+    if (pts.length === 1) { c.lineTo(p0[0] + 0.01, p0[1]); return; }
+    for (let i = 1; i < pts.length; i++) { const p = map ? map(pts[i]) : pts[i]; c.lineTo(p[0], p[1]); }
+  }
+
+  function label(c, x, y, text, r, fill, color, bold) {
+    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2);
+    c.fillStyle = fill; c.fill();
+    c.fillStyle = color;
+    c.font = `${bold ? 700 : 500} ${r * 1.25}px system-ui, sans-serif`;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(text, x, y + r * 0.05);
+  }
+
+  function draw() {
+    if (!S.guide) return;
+    const k = cv.width / S.W, g = S.guide, w = lw();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+    // 안내 칸: 음절 칸(점선), 중간선(흐리게), 기준선(진하게)
+    ctx.lineWidth = 1 / S.scale;
+    ctx.strokeStyle = '#c4cfdd';
+    ctx.setLineDash([6 / S.scale, 5 / S.scale]);
+    for (let j = 0; j < g.cells; j++) ctx.strokeRect(g.x + j * g.cell_width, g.y, g.cell_width, g.height);
+    ctx.strokeStyle = '#e1e7ef';
+    ctx.beginPath(); ctx.moveTo(g.x, g.midline_y); ctx.lineTo(g.x + g.width, g.midline_y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = '#8fa6c4'; ctx.lineWidth = 2 / S.scale;
+    ctx.beginPath(); ctx.moveTo(g.x - g.cell_width * 0.1, g.baseline_y); ctx.lineTo(g.x + g.width + g.cell_width * 0.1, g.baseline_y); ctx.stroke();
+
+    // 안내 원본(흐리게) + 획 순서 번호. 필순이 달라진 뒤에는 다음 번호 강조를 끈다
+    const cr = curRef(), ref = cr ? cr.data : null;
+    const next = S.strokes.length;     // 다음에(또는 지금) 쓸 획 번호(0부터)
+    const same = ref ? HW.prefixMatches(ref, S.strokes, g) : false;
+    updateBadge(cr, same);
+    if (ref) {
+      const map = p => HW.mapPoint(p, ref.guide, g);
+      ctx.lineWidth = w;
+      ref.strokes.forEach((s, i) => {
+        ctx.strokeStyle = same && i === next ? 'rgba(42,120,214,0.30)' : 'rgba(0,0,0,0.10)';
+        pathOf(ctx, s.points, map); ctx.stroke();
+      });
+      const r = Math.max(7 / S.scale, g.height * 0.045);
+      ref.strokes.forEach((s, i) => {
+        if (same && i === next) return;
+        const p = map(s.points[0]);
+        label(ctx, p[0], p[1], String(i + 1), r, 'rgba(255,255,255,0.65)', i < next ? 'rgba(0,0,0,0.18)' : 'rgba(0,0,0,0.42)', false);
+      });
+      if (same && next < ref.strokes.length) {   // 다음 획은 강조
+        const p = map(ref.strokes[next].points[0]);
+        label(ctx, p[0], p[1], String(next + 1), r * 1.3, 'rgba(42,120,214,0.92)', '#fff', true);
+      }
+    }
+
+    // 지금 쓴 획(음절별 색)
+    ctx.lineWidth = w;
+    S.strokes.forEach((s, i) => {
+      if (S.edit && i === S.sel) {
+        ctx.strokeStyle = 'rgba(42,120,214,0.28)'; ctx.lineWidth = w * 3.2;
+        pathOf(ctx, s.points); ctx.stroke(); ctx.lineWidth = w;
+      }
+      ctx.strokeStyle = HW.PALETTE[S.syl[i] % HW.PALETTE.length];
+      pathOf(ctx, s.points); ctx.stroke();
+    });
+    if (S.active && S.active.points.length) {
+      ctx.strokeStyle = '#222';
+      pathOf(ctx, S.active.points); ctx.stroke();
+    }
+    if (S.edit) {   // 고치기 모드에서는 내 획 번호도 표시
+      const r = Math.max(7 / S.scale, g.height * 0.04);
+      S.strokes.forEach((s, i) => {
+        label(ctx, s.points[0][0], s.points[0][1], String(i + 1), r, 'rgba(255,255,255,0.85)',
+              HW.PALETTE[S.syl[i] % HW.PALETTE.length], i === S.sel);
+      });
+    }
+  }
+
+  // ---------- 상태 표시 ----------
+  function status(msg, cls) { if (msg !== undefined) { S.msg = msg; S.msgClass = cls || ''; } renderStatus(); }
+  /** 오른쪽 위 조용한 필순 표시 */
+  function updateBadge(cr, same) {
+    const b = $('badge');
+    b.className = '';
+    if (!cr) { b.textContent = S.refs.length ? '안내 끔' : '안내 없음'; return; }
+    const ref = cr.data, gid = groupOf(cr.name), n = S.strokes.length, m = ref.strokes.length;
+    if (!same) { b.textContent = '필순 다름 → 새 그룹'; return; }
+    if (n === m) {
+      const sylSame = ref.syllables.every((v, i) => v === S.syl[i]);
+      b.textContent = sylSame ? `${gid} 필순과 같음` : '음절 구분 다름 → 새 그룹';
+      if (sylSame) b.className = 'same';
+      return;
+    }
+    b.textContent = `${gid} 필순과 같음 (${n}/${m}획)`;
+    b.className = 'same';
+  }
+
+  function renderStatus() {
+    const cr = curRef();
+    const parts = [];
+    let cnt = `획 ${S.strokes.length}`;
+    if (cr) cnt += ` / 안내 ${cr.data.strokes.length}`;
+    parts.push(cnt);
+    parts.push(`음절 ${cells()}칸`);
+    if (S.pointerTypes.size) parts.push('입력: ' + [...S.pointerTypes].join(', '));
+    parts.push(S.penOnly ? '손가락 무시' : '손가락 허용');
+    // 한 줄 고정이라 넘치면 말줄임: 알림 글을 앞에 둔다. 누르면 전체 글을 캔버스 위에 잠깐 겹쳐 보여 준다
+    let html = parts.join(' · ');
+    if (S.msg) html = `<span class="${S.msgClass}">${escapeHtml(S.msg)}</span> · ${html}`;
+    $('status').innerHTML = html;
+  }
+  let toastTimer = null;
+  $('status').addEventListener('click', () => {
+    const t = $('toast');
+    t.textContent = $('status').textContent;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 4000);
+  });
+  /** 글자가 바뀌는 버튼은 가장 긴 글자 기준으로 폭을 고정한다(버튼 줄 감김이 달라지지 않게) */
+  const FIXED_LABELS = {
+    penonly: ['펜만 쓰기: 켜짐', '펜만 쓰기: 꺼짐'],
+    clear: ['전체 지우기', '한 번 더 누르면 지움'],
+    refoff: ['안내 끄기', '안내 켜기'],
+    edit: ['음절 고치기', '음절 고치기 끝'],
+    mode: ['저장 방식: 하나씩', '저장 방식: 묶음'],
+    save: ['저장', '묶음에 담기'],
+    savenext: ['저장 후 다음', '담고 다음'],
+    bundleclear: ['묶음 비우기', '한 번 더 누르면 비움'],
+  };
+  function fixButtonWidths() {
+    for (const [id, labels] of Object.entries(FIXED_LABELS)) {
+      const b = $(id), cur = b.textContent;
+      b.style.width = '';
+      let w = 0;
+      for (const l of labels) { b.textContent = l; w = Math.max(w, b.offsetWidth); }
+      b.textContent = cur;
+      b.style.width = Math.ceil(w + 2) + 'px';
+    }
+  }
+  const escapeHtml = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function setPenOnly(on, byUser) {
+    S.penOnly = on;
+    if (byUser) { S.penOnlyUser = on; store.set('penOnlyUser', on); }
+    $('penonly').textContent = '펜만 쓰기: ' + (on ? '켜짐' : '꺼짐');
+    $('penonly').classList.toggle('on', on);
+    renderStatus();
+  }
+
+  // ---------- 입력 ----------
+  function toLogical(e) {
+    const rect = cv.getBoundingClientRect();
+    return [(e.clientX - rect.left) / S.scale, (e.clientY - rect.top) / S.scale];
+  }
+  const rnd = (v, d) => { const m = 10 ** d; return Math.round(v * m) / m; };
+
+  function addPoint(e) {
+    const [x, y] = toLogical(e);
+    const pts = S.active.points;
+    const p = [rnd(x, 2), rnd(y, 2), rnd(Math.max(0, e.timeStamp - S.t0), 1), rnd(e.pressure || 0, 3)];
+    const last = pts[pts.length - 1];
+    if (last && last[0] === p[0] && last[1] === p[1]) { last[3] = Math.max(last[3], p[3]); return; }
+    if (last && p[2] < last[2]) p[2] = last[2];
+    pts.push(p);
+  }
+
+  cv.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'pen' && !S.penSeen) {
+      S.penSeen = true;
+      if (S.penOnlyUser === null) { setPenOnly(true, false); status('펜이 감지되어 손가락·손바닥 터치를 무시합니다.', 'ok'); }
+    }
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (S.edit) { e.preventDefault(); selectAt(toLogical(e)); return; }   // 고치기는 손가락으로도
+    if (S.penOnly && e.pointerType === 'touch') return;          // 손바닥·손가락
+    e.preventDefault();
+    if (S.activeId !== null) return;                             // 이미 다른 포인터로 쓰는 중
+    if (S.t0 === null) S.t0 = e.timeStamp - S.tBase;
+    try { cv.setPointerCapture(e.pointerId); } catch { /* 무시 */ }
+    S.activeId = e.pointerId;
+    S.active = { pointer_type: e.pointerType || 'unknown', points: [] };
+    addPoint(e);
+    lockInputs();
+    schedule();
+  }, { passive: false });
+
+  cv.addEventListener('pointermove', e => {
+    if (e.pointerId !== S.activeId) return;
+    e.preventDefault();
+    const evs = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    for (const ev of (evs.length ? evs : [e])) addPoint(ev);
+    schedule();
+  }, { passive: false });
+
+  // 손을 뗀 이벤트(pointerup)의 좌표는 마지막 move와 같고 필압이 0이라 점으로 넣지 않는다
+  function finish(keep) {
+    if (S.activeId === null) return;
+    const st = S.active;
+    S.active = null; S.activeId = null;
+    if (!keep || !st.points.length) {
+      status('획이 취소되었습니다(시스템 제스처 등). 다시 써 주세요.', 'warn');
+      lockInputs(); schedule(); return;
+    }
+    S.strokes.push(st);
+    S.pointerTypes.add(st.pointer_type);
+    if (S.manual) S.syl.push(HW.nearestCell(st, S.guide));
+    else S.syl = HW.autoSplit(S.strokes, S.guide);
+    S.savedAs = null;
+    saveDraft();
+    lockInputs(); renderStatus(); schedule();   // 필순 비교는 오른쪽 위 표시로만(draw에서)
+  }
+
+  // ---------- 쓰던 획 임시 보관 ----------
+  // iPad Safari는 페이지를 닫을 때 경고(beforeunload)를 띄우지 않고, 메모리가 모자라면 탭을 다시 불러온다.
+  // 그래서 획을 하나 쓸 때마다 기기 저장소에 보관했다가 다시 열면 되살린다(지우기·저장 후 다음에서 비움).
+  function saveDraft() {
+    if (!S.strokes.length) { store.del('draft'); return; }
+    const ok = store.set('draft', {
+      style: $('style').value, word: $('word').value, wmm: $('wmm').value, hmm: $('hmm').value,
+      W: S.W, H: S.H, guide: S.guide, strokes: S.strokes, syl: S.syl, manual: S.manual,
+      pointerTypes: [...S.pointerTypes], refName: S.refName, guideOff: S.guideOff, savedAs: S.savedAs,
+    });
+    if (!ok) status('기기 저장 공간이 모자라 쓰던 획을 임시 보관하지 못했습니다. 저장하거나 묶음을 내보내세요.', 'warn');
+  }
+  function restoreDraft() {
+    const d = store.get('draft', null);
+    if (!d || !Array.isArray(d.strokes) || !d.strokes.length || !d.guide) return false;
+    $('style').value = d.style; $('word').value = d.word; $('wmm').value = d.wmm; $('hmm').value = d.hmm;
+    applySize({ W: d.W, H: d.H, guide: d.guide });
+    S.strokes = d.strokes; S.syl = d.syl; S.manual = !!d.manual; S.pointerTypes = new Set(d.pointerTypes || []);
+    S.savedAs = d.savedAs || null;
+    if (d.refName && S.refs.some(r => r.name === d.refName)) { S.refName = d.refName; S.guideOff = !!d.guideOff; }
+    let last = 0;
+    for (const s of S.strokes) for (const p of s.points) last = Math.max(last, p[2]);
+    S.tBase = last + 500;           // 이어 쓰는 획의 t가 앞 획보다 크게
+    lockInputs();
+    return true;
+  }
+  cv.addEventListener('pointerup', e => { if (e.pointerId === S.activeId) { e.preventDefault(); finish(true); } });
+  cv.addEventListener('pointercancel', e => { if (e.pointerId === S.activeId) finish(false); });
+  cv.addEventListener('lostpointercapture', e => { if (e.pointerId === S.activeId) finish(true); });
+  cv.addEventListener('contextmenu', e => e.preventDefault());
+  // iOS 사파리: 캔버스 위 두 손가락 확대·스크롤 막기
+  document.addEventListener('touchmove', e => { if (e.target === cv) e.preventDefault(); }, { passive: false });
+
+  // ---------- 음절 고치기 ----------
+  function segDist(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+    let t = L ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+  }
+  function selectAt(p) {
+    let best = -1, bd = Infinity;
+    S.strokes.forEach((s, i) => {
+      const pts = s.points;
+      for (let j = 0; j < pts.length; j++) {
+        const d = segDist(p, pts[j], pts[Math.min(j + 1, pts.length - 1)]);
+        if (d < bd) { bd = d; best = i; }
+      }
+    });
+    S.sel = bd <= S.guide.height * 0.15 ? best : -1;
+    renderSylbar(); schedule();
+  }
+  function renderSylbar() {
+    $('sylbar').classList.toggle('show', S.edit);
+    const box = $('sylbtns');
+    box.innerHTML = '';
+    if (S.sel < 0) { $('selinfo').textContent = S.strokes.length ? '획을 눌러 고르세요' : '쓴 획이 없습니다'; return; }
+    $('selinfo').textContent = `${S.sel + 1}번 획 → 음절:`;
+    const ch = HW.chars($('word').value);
+    for (let j = 0; j < S.guide.cells; j++) {
+      const b = document.createElement('button');
+      b.textContent = `${j + 1}${ch[j] ? ' ' + ch[j] : ''}`;
+      b.style.color = HW.PALETTE[j % HW.PALETTE.length];
+      b.style.fontWeight = '700';
+      if (S.syl[S.sel] === j) b.classList.add('cur');
+      b.onclick = () => {
+        S.syl[S.sel] = j; S.manual = true; S.savedAs = null; saveDraft();
+        renderSylbar(); status('음절 구분을 직접 고쳤습니다.'); schedule();
+      };
+      box.appendChild(b);
+    }
+  }
+  $('edit').onclick = () => {
+    S.edit = !S.edit;
+    $('edit').classList.toggle('on', S.edit);
+    $('edit').textContent = S.edit ? '음절 고치기 끝' : '음절 고치기';
+    if (S.edit && S.sel < 0 && S.strokes.length) S.sel = S.strokes.length - 1;
+    renderSylbar(); schedule();
+  };
+  $('selprev').onclick = () => { if (S.strokes.length) { S.sel = S.sel <= 0 ? S.strokes.length - 1 : S.sel - 1; renderSylbar(); schedule(); } };
+  $('selnext').onclick = () => { if (S.strokes.length) { S.sel = (S.sel + 1) % S.strokes.length; renderSylbar(); schedule(); } };
+  $('resplit').onclick = () => {
+    S.manual = false; S.syl = HW.autoSplit(S.strokes, S.guide); S.savedAs = null; saveDraft();
+    renderSylbar(); status('음절을 자동으로 다시 나눴습니다.'); schedule();
+  };
+
+  // ---------- 실행 취소·지우기 ----------
+  function undo() {
+    if (S.active || !S.strokes.length) return;
+    S.strokes.pop(); S.syl.pop();
+    if (!S.manual) S.syl = HW.autoSplit(S.strokes, S.guide);
+    if (S.sel >= S.strokes.length) S.sel = S.strokes.length - 1;
+    S.savedAs = null;
+    if (!S.strokes.length) reset(); else { saveDraft(); lockInputs(); renderSylbar(); status(''); schedule(); }
+  }
+  function disarmClear() {
+    if (S.clearArmed) clearTimeout(S.clearArmed);
+    S.clearArmed = null;
+    $('clear').textContent = '전체 지우기'; $('clear').classList.remove('armed');
+  }
+  function reset() {
+    S.strokes = []; S.syl = []; S.manual = false; S.active = null; S.activeId = null; S.t0 = null;
+    S.pointerTypes = new Set(); S.sel = -1; S.tBase = 0; S.savedAs = null;
+    store.del('draft');
+    lockInputs(); renderSylbar(); fit(); renderStatus();
+  }
+  $('undo').onclick = undo;
+  // 확인 창 대신 두 번 누르기(3초 안에 한 번 더)
+  $('clear').onclick = () => {
+    if (!S.strokes.length) return;
+    if (S.clearArmed) { disarmClear(); reset(); status('모두 지웠습니다.'); return; }
+    $('clear').textContent = '한 번 더 누르면 지움'; $('clear').classList.add('armed');
+    S.clearArmed = setTimeout(disarmClear, 3000);
+  };
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); undo(); }
+  });
+
+  // ---------- 안내 원본과 필순 그룹 ----------
+  function addRef(name, data, select) {
+    S.refs = S.refs.filter(r => r.name !== name);
+    S.refs.push({ name, data });
+    if (select) { S.refName = name; S.guideOff = false; }
+    S.groups = HW.groupSources(S.refs);
+    renderRefSel();
+  }
+  function renderRefSel() {
+    const sel = $('refsel');
+    sel.innerHTML = '';
+    sel.appendChild(new Option(S.refs.length ? '안내 끄기' : '(불러온 원본 없음)', ''));
+    for (const g of S.groups) {
+      const og = document.createElement('optgroup');
+      const first = S.refs.find(r => r.name === g.names[0]).data;
+      og.label = `${g.id} (${g.names.length}개) — ${first.strokes.length}획`;
+      for (const n of g.names) og.appendChild(new Option(`${g.id} · ${n}`, n));
+      sel.appendChild(og);
+    }
+    sel.disabled = !S.refs.length;
+    const cr = curRef();
+    sel.value = cr ? cr.name : '';
+    $('refoff').textContent = cr ? '안내 끄기' : '안내 켜기';
+    $('refoff').disabled = !S.refs.length;
+  }
+  $('refsel').onchange = () => {
+    const v = $('refsel').value;
+    if (v) { S.refName = v; S.guideOff = false; } else S.guideOff = true;
+    afterRefChange();
+  };
+  $('refoff').onclick = () => {
+    if (!S.refs.length) return;
+    if (curRef()) S.guideOff = true;
+    else {
+      S.guideOff = false;
+      if (!S.refs.some(r => r.name === S.refName)) {   // 고른 적 없으면 원본이 가장 많은 그룹의 첫 원본
+        const big = S.groups.reduce((a, b) => (b.names.length > a.names.length ? b : a));
+        S.refName = big.names[0];
+      }
+    }
+    afterRefChange();
+  };
+  function afterRefChange() {
+    renderRefSel();
+    const cr = curRef(), ref = cr ? cr.data : null;
+    if (!ref) { status(S.refs.length ? '필순 안내를 껐습니다.' : ''); schedule(); return; }
+    const [w] = HW.checkWord($('word').value);
+    if (!S.strokes.length && !w) {                // 단어가 비어 있으면 원본 값으로 채운다
+      $('word').value = ref.word; $('style').value = $('style').value || ref.style_id;
+      if (Array.isArray(ref.guide.aspect_mm)) { $('wmm').value = ref.guide.aspect_mm[0]; $('hmm').value = ref.guide.aspect_mm[1]; }
+      saveInputs(); fit();
+    }
+    const cur = HW.checkWord($('word').value)[0];
+    if (cur && ref.word !== cur) status(`불러온 원본의 단어(${ref.word})가 지금 단어(${cur})와 다릅니다.`, 'warn');
+    else status(`필순 안내: ${groupOf(cr.name)} · ${cr.name}`, 'ok');
+    schedule();
+  }
+  $('refload').onchange = async e => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    const bad = [];
+    let last = null;
+    for (const f of files) {
+      try {
+        const d = JSON.parse(await f.text());
+        if (HW.isBundle(d)) {                       // 묶음 파일: 안의 원본을 모두 안내 목록에
+          const u = HW.unpackBundle(d);
+          for (const it of u.items) { addRef(it.name, it.data, false); last = it.name; }
+          for (const er of u.errors) bad.push(`${f.name} ${er}`);
+          continue;
+        }
+        const err = HW.validateSource(d);
+        if (err) { bad.push(`${f.name}: ${err}`); continue; }
+        addRef(f.name, d, false); last = f.name;
+      } catch (err) { bad.push(`${f.name}: JSON을 읽을 수 없습니다`); }
+    }
+    if (last) { S.refName = last; S.guideOff = false; afterRefChange(); }
+    if (bad.length) status('불러오지 못함: ' + bad.join(' / '), 'warn');   // 창은 띄우지 않는다
+  };
+
+  // ---------- 저장 ----------
+  function deviceInfo() {
+    const n = navigator;
+    return {
+      user_agent: n.userAgent,
+      platform: (n.userAgentData && n.userAgentData.platform) || n.platform || '',
+      language: n.language || '',
+      dpr: window.devicePixelRatio || 1,
+      screen: [screen.width, screen.height],
+      viewport: [window.innerWidth, window.innerHeight],
+      max_touch_points: n.maxTouchPoints || 0,
+      pointer_types: [...S.pointerTypes],
+    };
+  }
+  function nextSeq(style, word, date) { return store.get(`seq.${style}.${word}.${date}`, 0) + 1; }
+
+  // 내려받기. iPad Safari는 "다운로드할까요?"를 물어보므로, 사용자가 늦게 눌러도 되게 주소를 1분 동안 살려 둔다
+  // (예전에는 5초 뒤에 지워 늦게 누르면 실패할 수 있었다).
+  function download(name, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  function save(andNext) {
+    if (S.active) return;
+    const [style, e1] = HW.checkStyle($('style').value);
+    const [word, e2] = HW.checkWord($('word').value);
+    // 확인 창 없이 저장한다. 막는 경우(이름 오류·빈 캔버스)도 상태줄에만 알린다
+    if (e1 || e2) { status(`저장하지 않음: ${e1 || e2}`, 'warn'); return; }
+    if (!S.strokes.length) { status('저장하지 않음: 쓴 획이 없습니다.', 'warn'); return; }
+    if (S.mode === 'bundle' && S.savedAs && S.bundle.some(it => it.name === S.savedAs)) {   // 같은 획을 두 번 담지 않음
+      if (andNext) { reset(); status(`이미 묶음에 담은 원본입니다(${S.savedAs}) — 다음 원본을 쓰세요`, 'ok'); }
+      else status(`이미 묶음에 담았습니다: ${S.savedAs}`);
+      return;
+    }
+    const cr = curRef();
+    const reference = cr ? {
+      file: cr.name,
+      order_match: HW.orderDiffs(cr.data, { strokes: S.strokes, syllables: S.syl, guide: S.guide }).length === 0,
+    } : null;
+    const empty = [];
+    for (let j = 0; j < S.guide.cells; j++) if (!S.syl.includes(j)) empty.push(j + 1);
+
+    const now = new Date(), date = HW.ymd(now), seq = nextSeq(style, word, date);
+    const data = HW.buildSource(
+      { style_id: style, word, W: S.W, H: S.H, guide: S.guide, penOnly: S.penOnly,
+        reference, strokes: S.strokes, syl: S.syl, manual: S.manual },
+      { created: HW.localIso(now), date, seq, device: deviceInfo() });
+    const name = HW.fileName(style, word, date, seq);
+    let verb = '저장';
+    if (S.mode === 'bundle') {
+      S.bundle.push({ name, data });
+      verb = `묶음에 담음(${S.bundle.length}개)`;
+      if (!saveBundle()) return;
+    } else download(name, HW.formatSource(data));
+    store.set(`seq.${style}.${word}.${date}`, seq);
+    // 저장한 원본도 목록에 넣어 그룹을 바로 갱신. 안내가 없으면(직접 끈 경우 제외) 이것을 안내로
+    addRef(name, data, !cr && !S.guideOff);
+    const g = S.groups.find(gr => gr.names.includes(name));
+    const where = g ? `${g.id}${g.names.length === 1 && S.groups.length > 1 ? ' 새 그룹' : ''}` : '';
+    if (andNext) reset(); else { S.savedAs = name; saveDraft(); }
+    status(`${verb}: ${name} → ${where}${empty.length ? ` (획 없는 음절: ${empty.join(', ')}번)` : ''}` +
+           `${andNext ? ' — 다음 원본을 쓰세요' : ''}`, 'ok');
+  }
+  $('save').onclick = () => save(false);
+  $('savenext').onclick = () => save(true);
+
+  // ---------- 묶음: 모아서 한 파일로 내려받기·공유 ----------
+  // 파일이 기기를 떠나는 길은 내려받기와 기기의 공유 창 두 가지뿐이다(어디로 보낼지는 공유 창에서 사용자가 고름).
+  /** 묶음을 기기 저장소에 보관. 실패하면(저장 공간 부족) 마지막에 담은 것을 되돌리고 알린다 */
+  function saveBundle() {
+    if (store.set('bundle', S.bundle)) { renderBundle(); return true; }
+    S.bundle.pop();
+    status('기기 저장 공간이 모자라 묶음에 담지 못했습니다. 먼저 [묶음 내려받기]나 [공유]로 내보낸 뒤 비우세요.', 'warn');
+    renderBundle();
+    return false;
+  }
+  const unsentCount = () => S.bundle.filter(it => !S.sentNames.includes(it.name)).length;
+  function renderBundle() {
+    const n = S.bundle.length, u = unsentCount(), c = $('bundlecount');
+    c.textContent = !n ? '묶음 비어 있음' : u ? `묶음 ${n}개 · 안 보냄 ${u}` : `묶음 ${n}개 · 보냄`;
+    c.classList.toggle('unsent', u > 0);
+    for (const id of ['bundledl', 'share', 'bundleclear']) $(id).disabled = !n;
+    const b = S.mode === 'bundle';
+    $('mode').textContent = b ? '저장 방식: 묶음' : '저장 방식: 하나씩';
+    $('mode').classList.toggle('on', b);
+    $('save').textContent = b ? '묶음에 담기' : '저장';
+    $('savenext').textContent = b ? '담고 다음' : '저장 후 다음';
+  }
+  function bundleFile() {
+    const now = new Date();
+    return { name: HW.bundleName(now, S.bundle.length),
+             text: HW.formatBundle(HW.buildBundle(S.bundle, HW.localIso(now))) };
+  }
+  function markSent(how, name) {
+    S.sentNames = S.bundle.map(it => it.name);
+    store.set('bundleSent', S.sentNames);
+    renderBundle();
+    status(`${how}: ${name} (원본 ${S.bundle.length}개). 가져오기가 끝난 뒤 [묶음 비우기]로 비우세요.`, 'ok');
+  }
+  $('mode').onclick = () => {
+    S.mode = S.mode === 'bundle' ? 'single' : 'bundle';
+    store.set('mode', S.mode);
+    renderBundle();
+    status(S.mode === 'bundle' ? '묶음 모드: 저장하면 묶음에 담고, [묶음 내려받기]·[공유]로 한 번에 내보냅니다.'
+                               : '하나씩 모드: 저장할 때마다 파일을 내려받습니다.');
+  };
+  $('bundledl').onclick = () => {
+    if (!S.bundle.length) return;
+    const f = bundleFile();
+    download(f.name, f.text);
+    markSent('내려받기', f.name);
+  };
+  // Safari는 버튼을 누른 처리 안에서 기다림 없이 바로 share를 불러야 공유 창을 연다(파일은 미리 만들어 둠).
+  // 공유 창은 HTTPS 페이지에서만 있다(PC에서 띄운 http 주소로 열면 없음 → 내려받기).
+  $('share').onclick = () => {
+    if (!S.bundle.length) return;
+    const f = bundleFile();
+    let file = null;
+    try { file = new File([f.text], f.name, { type: 'application/json' }); } catch { file = null; }
+    const can = file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] });
+    if (!can) {                                   // 공유 창이 없거나 이 파일을 넘길 수 없는 기기(안드로이드 Chrome 등)
+      download(f.name, f.text);
+      markSent('공유 창을 쓸 수 없어 내려받기', f.name);
+      return;
+    }
+    navigator.share({ files: [file] }).then(
+      () => markSent('공유', f.name),
+      err => {
+        if (err && err.name === 'AbortError') { status('공유를 취소했습니다(묶음은 그대로).'); return; }
+        download(f.name, f.text);
+        markSent('공유하지 못해 내려받기', f.name);
+      });
+  };
+  function disarmBundleClear() {
+    if (S.bundleArmed) clearTimeout(S.bundleArmed);
+    S.bundleArmed = null;
+    $('bundleclear').textContent = '묶음 비우기'; $('bundleclear').classList.remove('armed');
+  }
+  // 확인 창 대신 두 번 누르기(3초 안에 한 번 더). 안내 목록에 들어간 원본은 그대로 둔다
+  $('bundleclear').onclick = () => {
+    if (!S.bundle.length) return;
+    if (S.bundleArmed) {
+      disarmBundleClear();
+      const u = unsentCount();
+      S.bundle = []; S.sentNames = [];
+      store.del('bundle'); store.del('bundleSent');
+      renderBundle();
+      status(u ? `묶음을 비웠습니다(보내지 않은 원본 ${u}개도 지워짐).` : '묶음을 비웠습니다.', u ? 'warn' : '');
+      return;
+    }
+    $('bundleclear').textContent = '한 번 더 누르면 비움'; $('bundleclear').classList.add('armed');
+    S.bundleArmed = setTimeout(disarmBundleClear, 3000);
+  };
+
+  // ---------- 입력란 ----------
+  function saveInputs() {
+    store.set('style', $('style').value); store.set('word', $('word').value);
+    store.set('wmm', $('wmm').value); store.set('hmm', $('hmm').value);
+  }
+  for (const id of ['style', 'word', 'wmm', 'hmm']) {
+    $(id).addEventListener('input', () => {
+      saveInputs();
+      if (id === 'style' && S.strokes.length) saveDraft();
+      if (id !== 'style') { fit(); renderSylbar(); }
+      const err = id === 'style' ? HW.checkStyle($(id).value)[1] : id === 'word' ? HW.checkWord($(id).value)[1] : null;
+      status(err && $(id).value ? err : '', err ? 'warn' : '');
+    });
+  }
+  $('penonly').onclick = () => setPenOnly(!S.penOnly, true);
+
+  window.addEventListener('resize', fit);
+  // PC 브라우저만 닫기 경고를 띄운다(iPad Safari는 무시 — 그래서 쓰던 획은 임시 보관으로 되살린다)
+  window.addEventListener('beforeunload', e => {
+    if (S.strokes.length && !S.savedAs) { e.preventDefault(); e.returnValue = ''; }
+  });
+  // iPad Safari는 user-scalable=no를 무시해 캔버스 밖에서 두 손가락으로 확대된다. Safari 전용 확대 이벤트를 막는다
+  for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+
+  // 시작: 저장 방식·묶음 → 안내 목록 → 쓰던 획 되살리기
+  S.mode = store.get('mode', 'single') === 'bundle' ? 'bundle' : 'single';
+  const keptBundle = store.get('bundle', []);
+  S.bundle = Array.isArray(keptBundle) ? keptBundle.filter(it => it && typeof it.name === 'string' && !HW.validateSource(it.data)) : [];
+  S.sentNames = store.get('bundleSent', []);
+  for (const it of S.bundle) addRef(it.name, it.data, false);
+  setPenOnly(S.penOnly, false);
+  fixButtonWidths();
+  renderBundle();
+  const restored = restoreDraft();
+  renderRefSel();
+  fit();
+  const ver = `쓰기 페이지 버전 ${HW.APP_VERSION}`;
+  if (restored) {
+    status(`${ver} · 저장하지 않은 획 ${S.strokes.length}개를 되살렸습니다` +
+           (S.savedAs ? ` (이미 저장함: ${S.savedAs})` : '') + '.', 'ok');
+  } else status(`${ver} · 필체ID와 단어를 넣고 칸 안에 쓰세요.` +
+                (S.bundle.length ? ` 묶음에 ${S.bundle.length}개가 남아 있습니다.` : ''));
+})();
+</script>
+</body>
+</html>
